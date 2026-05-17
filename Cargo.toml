@@ -1,0 +1,16 @@
+[package]
+name = "solana-shake256"
+authors = ["Dean Little <@deanmlittle>"]
+version = "0.1.0"
+edition = "2024"
+description = "A no_std, SVM-optimized SHAKE256 library."
+repository = "https://github.com/blueshift-gg/solana-shake256"
+license = "MIT"
+keywords = ["shake256", "keccak", "sha3", "solana", "no-std"]
+categories = ["cryptography", "no-std"]
+readme = "README.md"
+exclude = [".github/", ".gitignore", "tests/"]
+
+[lib]
+
+[dependencies]
