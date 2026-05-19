@@ -67,8 +67,7 @@ loop {
 ## Status
 
 **Not audited.** Cross-checked against the NIST SHAKE256 KATs (`""`, `"abc"`,
-multi-block) and, transitively, the full PQCsignKAT suites of the two consumer
-crates.
+multi-block) and, transitively, the full PQCsignKAT suites of `solana-falcon512` and `solana-hawk512`.
 
 ## Disclaimer
 
