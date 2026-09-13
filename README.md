@@ -51,6 +51,7 @@ block. Use either this path or `squeeze` for a given `Xof`.
 `Shake128::RATE` is 168 bytes; `Shake256::RATE` is 136. The TurboSHAKE types
 have the same respective rates. These aliases select the security level and
 round count of `Shake<BITS, TURBO>`; other security levels fail to compile.
+Generic callers can use `finalize_with_domain::<0x1f>()` for either variant.
 
 ## Example program
 

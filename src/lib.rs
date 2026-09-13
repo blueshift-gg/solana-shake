@@ -330,14 +330,25 @@ impl<const BITS: usize, const TURBO: bool> Shake<BITS, TURBO> {
         }
     }
 
-    /// `domain ‖ pad10*1`: the domain byte at the current position, `0x80`
-    /// in the last rate byte, then the permutation that makes the first
-    /// output block available.
+    /// Finalize when `TURBO` is a const parameter. SHAKE requires `0x1f`;
+    /// TurboSHAKE accepts `0x01..=0x7f` (RFC 9861).
+    ///
+    /// ```compile_fail,E0080
+    /// let mut s = solana_shake::Shake256::new();
+    /// let _ = s.finalize_with_domain::<0x07>();
+    /// ```
     #[inline(always)]
-    const fn pad(&mut self, domain: u8) -> Xof<'_, BITS, TURBO> {
+    pub const fn finalize_with_domain<const DOMAIN: u8>(&mut self) -> Xof<'_, BITS, TURBO> {
+        const {
+            assert!(
+                DOMAIN >= 0x01 && DOMAIN <= 0x7f,
+                "DOMAIN must be in 0x01..=0x7f"
+            );
+            assert!(TURBO || DOMAIN == 0x1f, "SHAKE requires DOMAIN = 0x1f");
+        };
         let lane = self.pos / 8;
         let shift = 8 * (self.pos % 8);
-        self.state[lane] ^= (domain as u64) << shift;
+        self.state[lane] ^= (DOMAIN as u64) << shift;
         let last = Self::RATE - 1;
         self.state[last / 8] ^= 0x80u64 << (8 * (last % 8));
         keccak_p1600::<TURBO>(&mut self.state);
@@ -373,7 +384,7 @@ impl<const BITS: usize> Shake<BITS, false> {
     /// way to read output.
     #[inline(always)]
     pub const fn finalize(&mut self) -> Xof<'_, BITS, false> {
-        self.pad(0x1F)
+        self.finalize_with_domain::<0x1f>()
     }
 }
 
@@ -410,13 +421,7 @@ impl<const BITS: usize> Shake<BITS, true> {
     /// ```
     #[inline(always)]
     pub const fn finalize<const DOMAIN: u8>(&mut self) -> Xof<'_, BITS, true> {
-        const {
-            assert!(
-                DOMAIN >= 0x01 && DOMAIN <= 0x7F,
-                "DOMAIN must be in 0x01..=0x7F"
-            )
-        };
-        self.pad(DOMAIN)
+        self.finalize_with_domain::<DOMAIN>()
     }
 }
 
