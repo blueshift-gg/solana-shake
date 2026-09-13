@@ -1,24 +1,4 @@
-//! SHAKE256 (FIPS 202) — hand-rolled, `no_std`, zero dependencies, tuned
-//! for the Solana SBF target.
-//!
-//! This is the single source of the Keccak-f[1600] core shared by
-//! [`solana-hawk512`] and [`solana-falcon512`] (the permutation,
-//! `absorb`/`finalize` and SHAKE256 padding were byte-identical in both;
-//! consolidating here keeps two consensus-critical verifiers provably
-//! running the same primitive). The two output styles each verifier needs
-//! are both exposed: the bulk **rate-draining** path
-//! ([`Shake256::rate_lanes`] + [`Shake256::permute`], used by Falcon's
-//! `hash_to_point` rejection sampling) and a fixed-length
-//! [`Shake256::squeeze`] (used by HAWK's `hpub`/`M`/`h`).
-//!
-//! The `keccak_f1600` core uses Bertoni **lane-complementing** (the 6-lane
-//! Keccak-Team set `{1,2,8,12,17,20}`, pre-/post-complemented once per
-//! permute so ~456 NOTs are eliminated across 24 rounds) fused with an
-//! **in-place chi-row + 10 cell-saves** layout (no `B[25]` scratch).
-//!
-//! [`solana-hawk512`]: https://github.com/blueshift-gg/solana-hawk512
-//! [`solana-falcon512`]: https://github.com/blueshift-gg/solana-falcon512
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 const RC: [u64; 24] = [
@@ -48,7 +28,11 @@ const RC: [u64; 24] = [
     0x8000000080008008,
 ];
 
-fn keccak_f1600(s: &mut [u64; 25]) {
+/// Keccak-p[1600, 24], i.e. Keccak-f[1600], when `TURBO` is false; the last
+/// twelve rounds with their constants `RC[12..24]` (Keccak-p[1600, 12], RFC
+/// 9861) when it is true. The lane-complementing pattern is invariant per
+/// round, so the entry and exit complements are the same for both.
+const fn keccak_p1600<const TURBO: bool>(s: &mut [u64; 25]) {
     // **Bertoni lane-complementing + chi-row** layout.
     //
     // Pre-complement the canonical 6-lane Keccak Team set
@@ -179,18 +163,20 @@ fn keccak_f1600(s: &mut [u64; 25]) {
         }};
     }
 
-    round!(RC[0]);
-    round!(RC[1]);
-    round!(RC[2]);
-    round!(RC[3]);
-    round!(RC[4]);
-    round!(RC[5]);
-    round!(RC[6]);
-    round!(RC[7]);
-    round!(RC[8]);
-    round!(RC[9]);
-    round!(RC[10]);
-    round!(RC[11]);
+    if !TURBO {
+        round!(RC[0]);
+        round!(RC[1]);
+        round!(RC[2]);
+        round!(RC[3]);
+        round!(RC[4]);
+        round!(RC[5]);
+        round!(RC[6]);
+        round!(RC[7]);
+        round!(RC[8]);
+        round!(RC[9]);
+        round!(RC[10]);
+        round!(RC[11]);
+    }
     round!(RC[12]);
     round!(RC[13]);
     round!(RC[14]);
@@ -214,31 +200,75 @@ fn keccak_f1600(s: &mut [u64; 25]) {
     s[20] = !s[20];
 }
 
+/// SHAKE128 rate in bytes (1600-bit state − 2·128-bit capacity = 1344 bits).
+pub const SHAKE128_RATE: usize = Shake128::RATE;
 /// SHAKE256 rate in bytes (1600-bit state − 2·256-bit capacity = 1088 bits).
-pub const RATE: usize = 136;
+pub const SHAKE256_RATE: usize = Shake256::RATE;
 
-/// Incremental SHAKE256 (FIPS 202). `new` → `absorb`* → `finalize` → then
-/// either drain the rate (`rate_lanes`/`permute`) or `squeeze` a fixed
-/// number of bytes.
+/// SHAKE128 (FIPS 202): `Shake<128>`.
+pub type Shake128 = Shake<128>;
+/// SHAKE256 (FIPS 202): `Shake<256>`.
+pub type Shake256 = Shake<256>;
+/// TurboSHAKE128 (RFC 9861): `Shake<128, true>`, twelve rounds and a domain
+/// byte chosen at `finalize`.
+pub type TurboShake128 = Shake<128, true>;
+/// TurboSHAKE256 (RFC 9861): `Shake<256, true>`.
+pub type TurboShake256 = Shake<256, true>;
+
+/// A Keccak sponge at security level `BITS`, in its absorbing phase: `new` →
+/// `absorb`* → `finalize`, which pads, permutes and returns the [`Xof`] that
+/// squeezes. Output is only reachable through that value, so nothing can be
+/// squeezed before `finalize`, and while it lives the sponge cannot be
+/// absorbed into.
+///
+/// `TURBO` selects the permutation and the padding. `false` is SHAKE (FIPS
+/// 202): 24 rounds and the suffix `0x1F`. `true` is TurboSHAKE (RFC 9861):
+/// the last 12 rounds and a domain byte given to `finalize`. The rate is
+/// derived, 200 bytes of state less a capacity of `2 · BITS` bits: 168 at
+/// 128 and 136 at 256. Any other `BITS` fails to compile:
+///
+/// ```compile_fail,E0080
+/// // There is no SHAKE192; the security levels are 128 and 256.
+/// let _ = solana_shake::Shake::<192>::new();
+/// ```
 ///
 /// Every method is `#[inline]` so the consumer (built `lto`/`opt-level=3`
 /// for SBF) folds the whole thing in exactly as if it were a local module —
 /// the crate boundary has no codegen cost.
-pub struct Shake256 {
+pub struct Shake<const BITS: usize, const TURBO: bool = false> {
     state: [u64; 25],
     pos: usize,
 }
 
-impl Default for Shake256 {
+/// The squeezing phase of a [`Shake`] sponge, borrowed from its `finalize`.
+/// Either drain the rate ([`rate_lanes`](Self::rate_lanes) +
+/// [`permute`](Self::permute)) or [`squeeze`](Self::squeeze) a fixed number
+/// of bytes. Use one path per value: `permute` refills the rate without
+/// moving the `squeeze` cursor.
+///
+/// A borrow rather than a move: the 200-byte state stays where it is, so
+/// the phase change costs nothing on SBF.
+pub struct Xof<'a, const BITS: usize, const TURBO: bool> {
+    sponge: &'a mut Shake<BITS, TURBO>,
+}
+
+impl<const BITS: usize, const TURBO: bool> Default for Shake<BITS, TURBO> {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Shake256 {
+impl<const BITS: usize, const TURBO: bool> Shake<BITS, TURBO> {
+    /// Rate in bytes: the 200-byte state less a capacity of `2 · BITS` bits.
+    pub const RATE: usize = 200 - BITS / 4;
+    /// Rate in 64-bit lanes.
+    const LANES: usize = Self::RATE / 8;
+    const VALID: () = assert!(BITS == 128 || BITS == 256, "BITS must be 128 or 256");
+
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
+        let () = Self::VALID;
         Self {
             state: [0; 25],
             pos: 0,
@@ -246,7 +276,7 @@ impl Shake256 {
     }
 
     #[inline(always)]
-    pub fn absorb(&mut self, data: &[u8]) {
+    pub const fn absorb(&mut self, data: &[u8]) {
         let mut i = 0;
         let len = data.len();
 
@@ -256,8 +286,8 @@ impl Shake256 {
             let shift = 8 * (self.pos % 8);
             self.state[lane] ^= (data[i] as u64) << shift;
             self.pos += 1;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
+            if self.pos == Self::RATE {
+                keccak_p1600::<TURBO>(&mut self.state);
                 self.pos = 0;
             }
             i += 1;
@@ -265,18 +295,23 @@ impl Shake256 {
 
         // Phase 2: bulk 8-byte chunks XORed straight into a lane. Bytes within
         // a lane are little-endian per FIPS 202, so `from_le_bytes` is the
-        // correct assembly.
+        // correct assembly. `split_first_chunk` yields the `[u8; 8]` inside a
+        // `const fn`; `try_into` on a subslice is a trait call and is not.
+        let (_, mut rest) = data.split_at(i);
         while i + 8 <= len {
             // SAFETY: phase 1 made `self.pos` lane-aligned (multiple of 8),
-            // and `pos < RATE = 136 = 17 * 8`, so `pos / 8 < 17 < 25`.
-            unsafe { core::hint::assert_unchecked(self.pos / 8 < 17) };
-            let chunk_bytes: [u8; 8] = data[i..i + 8].try_into().unwrap();
-            let chunk = u64::from_le_bytes(chunk_bytes);
-            self.state[self.pos / 8] ^= chunk;
+            // and `pos < RATE = LANES * 8`, so `pos / 8 < LANES ≤ 24 < 25`.
+            unsafe { core::hint::assert_unchecked(self.pos / 8 < Self::LANES) };
+            let (chunk, tail) = match rest.split_first_chunk::<8>() {
+                Some(split) => split,
+                None => break,
+            };
+            rest = tail;
+            self.state[self.pos / 8] ^= u64::from_le_bytes(*chunk);
             self.pos += 8;
             i += 8;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
+            if self.pos == Self::RATE {
+                keccak_p1600::<TURBO>(&mut self.state);
                 self.pos = 0;
             }
         }
@@ -287,40 +322,128 @@ impl Shake256 {
             let shift = 8 * (self.pos % 8);
             self.state[lane] ^= (data[i] as u64) << shift;
             self.pos += 1;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
+            if self.pos == Self::RATE {
+                keccak_p1600::<TURBO>(&mut self.state);
                 self.pos = 0;
             }
             i += 1;
         }
     }
 
+    /// Finalize when `TURBO` is a const parameter. SHAKE requires `0x1f`;
+    /// TurboSHAKE accepts `0x01..=0x7f` (RFC 9861).
+    ///
+    /// ```compile_fail,E0080
+    /// let mut s = solana_shake::Shake256::new();
+    /// let _ = s.finalize_with_domain::<0x07>();
+    /// ```
     #[inline(always)]
-    pub fn finalize(&mut self) {
+    pub const fn finalize_with_domain<const DOMAIN: u8>(&mut self) -> Xof<'_, BITS, TURBO> {
+        const {
+            assert!(
+                DOMAIN >= 0x01 && DOMAIN <= 0x7f,
+                "DOMAIN must be in 0x01..=0x7f"
+            );
+            assert!(TURBO || DOMAIN == 0x1f, "SHAKE requires DOMAIN = 0x1f");
+        };
         let lane = self.pos / 8;
         let shift = 8 * (self.pos % 8);
-        self.state[lane] ^= 0x1Fu64 << shift;
-        let last = RATE - 1;
+        self.state[lane] ^= (DOMAIN as u64) << shift;
+        let last = Self::RATE - 1;
         self.state[last / 8] ^= 0x80u64 << (8 * (last % 8));
-        keccak_f1600(&mut self.state);
+        keccak_p1600::<TURBO>(&mut self.state);
         self.pos = 0;
+        Xof { sponge: self }
+    }
+}
+
+impl<const BITS: usize> Shake<BITS, false> {
+    /// Hash a byte slice to exactly `LEN` output bytes.
+    #[inline]
+    pub const fn hash<const LEN: usize>(data: &[u8]) -> [u8; LEN] {
+        Self::hashv::<LEN>(&[data])
     }
 
-    /// First 17 u64 lanes (= the 136-byte rate). Bytes within each lane are
-    /// little-endian per FIPS 202: byte at offset `b` of lane `l` is
+    /// Hash concatenated byte slices without allocating.
+    /// Slice boundaries add no padding or domain separation.
+    #[inline]
+    pub const fn hashv<const LEN: usize>(data: &[&[u8]]) -> [u8; LEN] {
+        let mut sponge = Self::new();
+        let mut i = 0;
+        while i < data.len() {
+            sponge.absorb(data[i]);
+            i += 1;
+        }
+        let mut out = [0; LEN];
+        sponge.finalize().squeeze(&mut out);
+        out
+    }
+
+    /// SHAKE padding (FIPS 202 §6.2: the suffix `1111` then `pad10*1`, so
+    /// the byte `0x1F`) and the permutation. The returned [`Xof`] is the only
+    /// way to read output.
+    #[inline(always)]
+    pub const fn finalize(&mut self) -> Xof<'_, BITS, false> {
+        self.finalize_with_domain::<0x1f>()
+    }
+}
+
+impl<const BITS: usize> Shake<BITS, true> {
+    /// Hash a byte slice to exactly `LEN` output bytes.
+    #[inline]
+    pub const fn hash<const LEN: usize, const DOMAIN: u8>(data: &[u8]) -> [u8; LEN] {
+        Self::hashv::<LEN, DOMAIN>(&[data])
+    }
+
+    /// Hash concatenated byte slices without allocating.
+    /// Slice boundaries add no padding or domain separation.
+    #[inline]
+    pub const fn hashv<const LEN: usize, const DOMAIN: u8>(data: &[&[u8]]) -> [u8; LEN] {
+        let mut sponge = Self::new();
+        let mut i = 0;
+        while i < data.len() {
+            sponge.absorb(data[i]);
+            i += 1;
+        }
+        let mut out = [0; LEN];
+        sponge.finalize::<DOMAIN>().squeeze(&mut out);
+        out
+    }
+
+    /// TurboSHAKE padding (RFC 9861: the domain byte `DOMAIN`, in
+    /// `0x01..=0x7F`, then `pad10*1`) and the permutation. The domain byte
+    /// is a protocol constant, so it is a const parameter, and one outside
+    /// the range fails to compile:
+    ///
+    /// ```compile_fail,E0080
+    /// let mut s = solana_shake::TurboShake128::new();
+    /// let _ = s.finalize::<0x80>();
+    /// ```
+    #[inline(always)]
+    pub const fn finalize<const DOMAIN: u8>(&mut self) -> Xof<'_, BITS, true> {
+        self.finalize_with_domain::<DOMAIN>()
+    }
+}
+
+impl<const BITS: usize, const TURBO: bool> Xof<'_, BITS, TURBO> {
+    const RATE: usize = Shake::<BITS, TURBO>::RATE;
+    const LANES: usize = Shake::<BITS, TURBO>::LANES;
+
+    /// The first `RATE / 8` u64 lanes (= the rate). Bytes within each lane
+    /// are little-endian per FIPS 202: byte at offset `b` of lane `l` is
     /// `(rate_lanes()[l] >> (8*b)) & 0xff`. Drain this, then call
     /// [`permute`](Self::permute) for the next block — the bulk-rate squeeze
-    /// path (e.g. Falcon's `hash_to_point` rejection sampling).
+    /// path (e.g. Falcon's `hash_to_point`, ML-DSA's `RejNTTPoly`).
     #[inline]
-    pub fn rate_lanes(&self) -> &[u64] {
-        &self.state[..17]
+    pub const fn rate_lanes(&self) -> &[u64] {
+        self.sponge.state.split_at(Self::LANES).0
     }
 
-    /// Apply Keccak-f[1600] to refill the rate (used with
+    /// Apply the permutation to refill the rate (used with
     /// [`rate_lanes`](Self::rate_lanes)).
     #[inline]
-    pub fn permute(&mut self) {
-        keccak_f1600(&mut self.state);
+    pub const fn permute(&mut self) {
+        keccak_p1600::<TURBO>(&mut self.sponge.state);
     }
 
     /// Squeeze exactly `LEN` bytes, handling rate-boundary permutes. `LEN`
@@ -330,47 +453,51 @@ impl Shake256 {
     /// so a lane-aligned run of ≥ 8 bytes is one `to_le_bytes` copy (the
     /// same bytes as eight `state[lane] >> 8k` reads).
     #[inline]
-    pub fn squeeze<const LEN: usize>(&mut self, out: &mut [u8; LEN]) {
+    pub const fn squeeze<const LEN: usize>(&mut self, out: &mut [u8; LEN]) {
+        let s: &mut Shake<BITS, TURBO> = self.sponge;
         let len = LEN;
         let mut i = 0;
 
         // Byte-by-byte until lane-aligned.
-        while i < len && !self.pos.is_multiple_of(8) {
-            let lane = self.pos / 8;
-            let shift = 8 * (self.pos % 8);
-            out[i] = (self.state[lane] >> shift) as u8;
-            self.pos += 1;
+        while i < len && !s.pos.is_multiple_of(8) {
+            let lane = s.pos / 8;
+            let shift = 8 * (s.pos % 8);
+            out[i] = (s.state[lane] >> shift) as u8;
+            s.pos += 1;
             i += 1;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
-                self.pos = 0;
+            if s.pos == Self::RATE {
+                keccak_p1600::<TURBO>(&mut s.state);
+                s.pos = 0;
             }
         }
 
-        // Bulk 8-byte lanes (no rate boundary lands mid-lane: RATE = 17·8).
-        while i + 8 <= len && self.pos + 8 <= RATE {
-            // SAFETY: `pos` lane-aligned, `pos + 8 ≤ RATE = 136` ⇒
-            // `pos/8 ≤ 16 < 17 < 25`.
-            unsafe { core::hint::assert_unchecked(self.pos / 8 < 17) };
-            out[i..i + 8].copy_from_slice(&self.state[self.pos / 8].to_le_bytes());
-            self.pos += 8;
+        // Bulk 8-byte lanes (no rate boundary lands mid-lane: RATE = LANES·8).
+        while i + 8 <= len && s.pos + 8 <= Self::RATE {
+            // SAFETY: `pos` lane-aligned, `pos + 8 ≤ RATE` ⇒ `pos/8 < LANES`.
+            unsafe { core::hint::assert_unchecked(s.pos / 8 < Self::LANES) };
+            let (_, tail) = out.split_at_mut(i);
+            let Some((chunk, _)) = tail.split_first_chunk_mut::<8>() else {
+                break;
+            };
+            *chunk = s.state[s.pos / 8].to_le_bytes();
+            s.pos += 8;
             i += 8;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
-                self.pos = 0;
+            if s.pos == Self::RATE {
+                keccak_p1600::<TURBO>(&mut s.state);
+                s.pos = 0;
             }
         }
 
         // Tail bytes (< 8 left, or a partial lane before a rate boundary).
         while i < len {
-            let lane = self.pos / 8;
-            let shift = 8 * (self.pos % 8);
-            out[i] = (self.state[lane] >> shift) as u8;
-            self.pos += 1;
+            let lane = s.pos / 8;
+            let shift = 8 * (s.pos % 8);
+            out[i] = (s.state[lane] >> shift) as u8;
+            s.pos += 1;
             i += 1;
-            if self.pos == RATE {
-                keccak_f1600(&mut self.state);
-                self.pos = 0;
+            if s.pos == Self::RATE {
+                keccak_p1600::<TURBO>(&mut s.state);
+                s.pos = 0;
             }
         }
     }
