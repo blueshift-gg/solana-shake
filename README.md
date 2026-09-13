@@ -15,7 +15,7 @@ protocols whose specification fixes SHAKE.
 
 ```toml
 [dependencies]
-solana-shake = { git = "https://github.com/blueshift-gg/solana-shake" }
+solana-shake = { git = "https://github.com/blueshift-gg/solana-shake", branch = "turboshake" }
 ```
 
 ```rust
@@ -52,37 +52,33 @@ block. Use either this path or `squeeze` for a given `Xof`.
 have the same respective rates. These aliases select the security level and
 round count of `Shake<BITS, TURBO>`; other security levels fail to compile.
 
-### Migrating from solana-shake256
+## Example program
 
-SHAKE256 output bytes are unchanged. `finalize` now returns the `Xof` used
-for output: `let mut output = sponge.finalize(); output.squeeze(&mut bytes)`.
-The old crate-level `RATE` is `Shake256::RATE`.
+The [program](program/src/lib.rs) takes `[tag: 1][message]` and returns 32 bytes.
+Tags `0..3` select SHAKE128, SHAKE256, TurboSHAKE128 and TurboSHAKE256.
+Tags `4..7` use the same functions through `hashv`, splitting the message in half.
+TurboSHAKE uses domain `0x1f`. No accounts are needed.
+
+The [SBPF test](tests/sbpf.rs) checks all eight instructions against RustCrypto.
 
 ## Compute units
 
-Measured on SBPF v3 under Mollusk, platform-tools v1.56:
+Measured on SBPF v3 with the example program; 32-byte output.
 
-| Operation | CU |
-|---|---:|
-| SHAKE256 finalize, empty input | 9,910 |
-| SHAKE256 absorb 1,312 bytes, squeeze 64 | 102,310 |
-| SHAKE128 drain three rate blocks | 39,837 |
-| TurboSHAKE256 finalize, empty input | 5,216 |
-
-The permutation uses lane complementing and an unrolled in-place schedule.
-The SBPF tests reproduce these measurements through the public API.
+| Function | Empty input | 1,312-byte input |
+|---|---:|---:|
+| SHAKE128 | ~10,200 CU | ~83,000 CU |
+| SHAKE256 | ~10,200 CU | ~103,000 CU |
+| TurboSHAKE128 | ~5,500 CU | ~45,500 CU |
+| TurboSHAKE256 | ~5,500 CU | ~56,000 CU |
 
 ## Tests
-
-CI runs fmt, strict Clippy, doctests, NIST CAVP vectors, RFC 9861 vectors,
-comparisons with RustCrypto `sha3` and the published `solana-shake256`,
-and SBPF known-output checks. Chunked input and output are checked at rate
-boundaries, including `hashv`.
 
 ```sh
 cargo test --lib --test kat --test shake --test turboshake
 cargo test --doc
-cargo test --test sbpf -- --nocapture --test-threads=1
+cargo build-sbf --arch v3 --manifest-path program/Cargo.toml
+cargo test --test sbpf -- --nocapture
 ```
 
 SBPF tests require `cargo-build-sbf 4.2.0`. JavaScript callers can use
@@ -93,3 +89,6 @@ Not independently audited.
 ## License
 
 [MIT](LICENSE).
+
+From `solana-shake256`: output bytes are unchanged; `finalize()` now returns
+the `Xof` used for squeezing, and `RATE` is `Shake256::RATE`.

@@ -1508,12 +1508,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
-name = "pathdiff"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
-
-[[package]]
 name = "percentage"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2552,9 +2546,23 @@ dependencies = [
 name = "solana-shake"
 version = "0.1.0"
 dependencies = [
+ "mollusk-svm",
  "sha3",
+ "solana-address",
+ "solana-instruction",
  "solana-shake256",
- "svm-unit-test",
+]
+
+[[package]]
+name = "solana-shake-example"
+version = "0.1.0"
+dependencies = [
+ "solana-account-info",
+ "solana-cpi",
+ "solana-program-entrypoint",
+ "solana-program-error",
+ "solana-pubkey",
+ "solana-shake",
 ]
 
 [[package]]
@@ -2904,33 +2912,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "svm-unit-test"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71bb94bc47592e1cf9554de8c8b2d9897a38ae006bc2b6240ece44190e0656e9"
-dependencies = [
- "mollusk-svm",
- "pathdiff",
- "quote",
- "solana-address",
- "solana-instruction",
- "solana-program-error",
- "svm-unit-test-macros",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "svm-unit-test-macros"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca5bcad00459d09e7ccc12341ba8549f292cad4b9f4db1f6a95e99de0ffaca63"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "syn"

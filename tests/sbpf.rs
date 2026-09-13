@@ -1,144 +1,56 @@
-//! SBPF compute-unit measurements under Mollusk; needs `cargo build-sbf`.
-//! The stages mirror the consumers: `finalize` on an empty sponge (one
-//! permutation plus the two padding XORs), the same followed by a second
-//! permutation, ML-DSA's public-key hash (absorb 1,312 bytes, squeeze 64)
-//! and a Falcon-style rate drain; then TurboSHAKE256's twelve-round
-//! permutation through the same two `finalize` stages.
-use core::hint::black_box;
-use solana_shake::{Shake128, Shake256, TurboShake128, TurboShake256};
-use svm_unit_test::svm_test;
+use mollusk_svm::Mollusk;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use solana_address::Address;
+use solana_instruction::Instruction;
 
-#[svm_test]
-fn finalize_empty() {
-    let mut s = black_box(Shake256::new());
-    let xof = s.finalize();
-    black_box(&xof);
+fn hash<H: Update + ExtendableOutput>(mut hasher: H, input: &[u8]) -> [u8; 32] {
+    hasher.update(input);
+    let mut output = [0; 32];
+    hasher.finalize_xof().read(&mut output);
+    output
 }
 
-#[svm_test]
-fn finalize_empty_then_permute() {
-    let mut s = black_box(Shake256::new());
-    let mut xof = s.finalize();
-    xof.permute();
-    black_box(&xof);
-}
-
-#[svm_test]
-fn absorb_1312_squeeze_64() {
-    let mut s = Shake256::new();
-    s.absorb(black_box(&[0x5a; 1312]));
-    let mut xof = s.finalize();
-    let mut out = [0u8; 64];
-    xof.squeeze(&mut out);
-    black_box(&out);
-}
-
-#[svm_test]
-fn drain_three_blocks() {
-    let mut s = Shake128::new();
-    s.absorb(black_box(b"seed"));
-    let mut xof = s.finalize();
-    let mut acc = 0u64;
-    for _ in 0..3 {
-        for &lane in xof.rate_lanes() {
-            acc ^= lane;
+#[test]
+fn example_program() {
+    let program = Address::new_from_array([1; 32]);
+    let elf =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/deploy/solana_shake_example");
+    let svm = Mollusk::new(&program, elf.to_str().unwrap());
+    for length in [0, 3, 135, 136, 137, 167, 168, 169, 1312] {
+        let input = vec![0x5a; length];
+        let expected = [
+            hash(sha3::Shake128::default(), &input),
+            hash(sha3::Shake256::default(), &input),
+            hash(
+                sha3::TurboShake128::from_core(sha3::TurboShake128Core::new(0x1f)),
+                &input,
+            ),
+            hash(
+                sha3::TurboShake256::from_core(sha3::TurboShake256Core::new(0x1f)),
+                &input,
+            ),
+        ];
+        for tag in 0..8 {
+            let data = [&[tag][..], &input].concat();
+            let instruction = Instruction::new_with_bytes(program, &data, vec![]);
+            let result = svm.process_instruction(&instruction, &[]);
+            assert!(result.program_result.is_ok(), "{:?}", result.program_result);
+            assert_eq!(result.return_data, expected[usize::from(tag % 4)]);
+            assert!(result.compute_units_consumed < 120_000);
+            if length == 0 || length == 1312 {
+                eprintln!(
+                    "tag {tag}, {length} bytes: {} CU",
+                    result.compute_units_consumed
+                );
+            }
         }
-        xof.permute();
     }
-    black_box(acc);
-}
-
-#[svm_test]
-fn turbo_finalize_empty() {
-    let mut s = black_box(TurboShake256::new());
-    let xof = s.finalize::<0x1F>();
-    black_box(&xof);
-}
-
-#[svm_test]
-fn turbo_finalize_empty_then_permute() {
-    let mut s = black_box(TurboShake256::new());
-    let mut xof = s.finalize::<0x1F>();
-    xof.permute();
-    black_box(&xof);
-}
-
-#[svm_test]
-fn shake128_hash_matches_vector() {
-    assert_eq!(
-        Shake128::hash::<32>(black_box(b"abc")),
-        [
-            0x58, 0x81, 0x09, 0x2d, 0xd8, 0x18, 0xbf, 0x5c, 0xf8, 0xa3, 0xdd, 0xb7, 0x93, 0xfb,
-            0xcb, 0xa7, 0x40, 0x97, 0xd5, 0xc5, 0x26, 0xa6, 0xd3, 0x5f, 0x97, 0xb8, 0x33, 0x51,
-            0x94, 0x0f, 0x2c, 0xc8
-        ]
-    );
-    assert_eq!(
-        Shake128::hashv::<32>(black_box(&[b"a", b"", b"bc"])),
-        [
-            0x58, 0x81, 0x09, 0x2d, 0xd8, 0x18, 0xbf, 0x5c, 0xf8, 0xa3, 0xdd, 0xb7, 0x93, 0xfb,
-            0xcb, 0xa7, 0x40, 0x97, 0xd5, 0xc5, 0x26, 0xa6, 0xd3, 0x5f, 0x97, 0xb8, 0x33, 0x51,
-            0x94, 0x0f, 0x2c, 0xc8
-        ]
-    );
-}
-
-#[svm_test]
-fn shake256_hash_matches_vector() {
-    assert_eq!(
-        Shake256::hash::<32>(black_box(b"abc")),
-        [
-            0x48, 0x33, 0x66, 0x60, 0x13, 0x60, 0xa8, 0x77, 0x1c, 0x68, 0x63, 0x08, 0x0c, 0xc4,
-            0x11, 0x4d, 0x8d, 0xb4, 0x45, 0x30, 0xf8, 0xf1, 0xe1, 0xee, 0x4f, 0x94, 0xea, 0x37,
-            0xe7, 0x8b, 0x57, 0x39
-        ]
-    );
-    assert_eq!(
-        Shake256::hashv::<32>(black_box(&[b"a", b"", b"bc"])),
-        [
-            0x48, 0x33, 0x66, 0x60, 0x13, 0x60, 0xa8, 0x77, 0x1c, 0x68, 0x63, 0x08, 0x0c, 0xc4,
-            0x11, 0x4d, 0x8d, 0xb4, 0x45, 0x30, 0xf8, 0xf1, 0xe1, 0xee, 0x4f, 0x94, 0xea, 0x37,
-            0xe7, 0x8b, 0x57, 0x39
-        ]
-    );
-}
-
-#[svm_test]
-fn turboshake128_hash_matches_rfc9861() {
-    assert_eq!(
-        TurboShake128::hash::<32, 0x1f>(black_box(b"")),
-        [
-            0x1e, 0x41, 0x5f, 0x1c, 0x59, 0x83, 0xaf, 0xf2, 0x16, 0x92, 0x17, 0x27, 0x7d, 0x17,
-            0xbb, 0x53, 0x8c, 0xd9, 0x45, 0xa3, 0x97, 0xdd, 0xec, 0x54, 0x1f, 0x1c, 0xe4, 0x1a,
-            0xf2, 0xc1, 0xb7, 0x4c
-        ]
-    );
-    assert_eq!(
-        TurboShake128::hashv::<32, 0x1f>(black_box(&[b"", b""])),
-        [
-            0x1e, 0x41, 0x5f, 0x1c, 0x59, 0x83, 0xaf, 0xf2, 0x16, 0x92, 0x17, 0x27, 0x7d, 0x17,
-            0xbb, 0x53, 0x8c, 0xd9, 0x45, 0xa3, 0x97, 0xdd, 0xec, 0x54, 0x1f, 0x1c, 0xe4, 0x1a,
-            0xf2, 0xc1, 0xb7, 0x4c
-        ]
-    );
-}
-
-#[svm_test]
-fn turboshake256_hash_matches_rfc9861() {
-    assert_eq!(
-        TurboShake256::hash::<32, 0x1f>(black_box(b"")),
-        [
-            0x36, 0x7a, 0x32, 0x9d, 0xaf, 0xea, 0x87, 0x1c, 0x78, 0x02, 0xec, 0x67, 0xf9, 0x05,
-            0xae, 0x13, 0xc5, 0x76, 0x95, 0xdc, 0x2c, 0x66, 0x63, 0xc6, 0x10, 0x35, 0xf5, 0x9a,
-            0x18, 0xf8, 0xe7, 0xdb
-        ]
-    );
-    assert_eq!(
-        TurboShake256::hashv::<32, 0x1f>(black_box(&[b"", b""])),
-        [
-            0x36, 0x7a, 0x32, 0x9d, 0xaf, 0xea, 0x87, 0x1c, 0x78, 0x02, 0xec, 0x67, 0xf9, 0x05,
-            0xae, 0x13, 0xc5, 0x76, 0x95, 0xdc, 0x2c, 0x66, 0x63, 0xc6, 0x10, 0x35, 0xf5, 0x9a,
-            0x18, 0xf8, 0xe7, 0xdb
-        ]
-    );
+    for data in [&[][..], &[8]] {
+        let instruction = Instruction::new_with_bytes(program, data, vec![]);
+        assert!(
+            svm.process_instruction(&instruction, &[])
+                .program_result
+                .is_err()
+        );
+    }
 }
