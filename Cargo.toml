@@ -1,16 +1,20 @@
 [package]
-name = "solana-shake256"
+name = "solana-shake"
 authors = ["Dean Little <@deanmlittle>"]
 version = "0.1.0"
 edition = "2024"
-description = "A no_std, SVM-optimized SHAKE256 library."
-repository = "https://github.com/blueshift-gg/solana-shake256"
+description = "A no_std, SVM-optimized SHAKE and TurboSHAKE library."
+repository = "https://github.com/blueshift-gg/solana-shake"
 license = "MIT"
-keywords = ["shake256", "keccak", "sha3", "solana", "no-std"]
+keywords = ["shake128", "shake256", "keccak", "sha3", "solana"]
 categories = ["cryptography", "no-std"]
 readme = "README.md"
 exclude = [".github/", ".gitignore", "tests/"]
 
-[lib]
-
-[dependencies]
+[dev-dependencies]
+sha3 = "0.10"
+# The published predecessor: `tests/shake.rs` checks every SHAKE256 output
+# path against it byte for byte.
+solana-shake256 = "0.1.0"
+# SBPF compute-unit measurements (`tests/sbpf.rs`); needs `cargo build-sbf`.
+svm-unit-test = "0.1.10"
