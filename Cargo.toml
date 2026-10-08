@@ -11,6 +11,16 @@ categories = ["cryptography", "no-std"]
 readme = "README.md"
 exclude = [".github/", ".gitignore", "tests/", "program/"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[features]
+# Keccak-256 through the `sol_keccak256` syscall, and an XOF built on it.
+keccak256 = ["dep:solana-define-syscall"]
+
+[target.'cfg(target_os = "solana")'.dependencies]
+solana-define-syscall = { version = "5.1", optional = true }
+
 [dev-dependencies]
 sha3 = "0.10"
 # The published predecessor: `tests/shake.rs` checks every SHAKE256 output

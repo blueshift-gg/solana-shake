@@ -30,6 +30,31 @@ fn example_program() {
                 &input,
             ),
         ];
+        let keccak = |parts: &[&[u8]]| -> [u8; 32] {
+            use sha3::Digest;
+            let mut hasher = sha3::Keccak256::new();
+            for part in parts {
+                Digest::update(&mut hasher, part);
+            }
+            hasher.finalize().into()
+        };
+        let seed = [keccak(&[&[0x05, 0], &input]), keccak(&[&[0x05, 1], &input])].concat();
+        for (tag, expected) in [
+            (8, keccak(&[&input])),
+            (9, keccak(&[&[0x80], &seed, &1u64.to_le_bytes()])),
+        ] {
+            let data = [&[tag][..], &input].concat();
+            let instruction = Instruction::new_with_bytes(program, &data, vec![]);
+            let result = svm.process_instruction(&instruction, &[]);
+            assert!(result.program_result.is_ok(), "{:?}", result.program_result);
+            assert_eq!(result.return_data, expected);
+            if length == 0 || length == 1312 {
+                eprintln!(
+                    "tag {tag}, {length} bytes: {} CU",
+                    result.compute_units_consumed
+                );
+            }
+        }
         for tag in 0..8 {
             let data = [&[tag][..], &input].concat();
             let instruction = Instruction::new_with_bytes(program, &data, vec![]);
@@ -45,7 +70,7 @@ fn example_program() {
             }
         }
     }
-    for data in [&[][..], &[8]] {
+    for data in [&[][..], &[10]] {
         let instruction = Instruction::new_with_bytes(program, data, vec![]);
         assert!(
             svm.process_instruction(&instruction, &[])

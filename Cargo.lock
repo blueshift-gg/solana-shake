@@ -2549,6 +2549,7 @@ dependencies = [
  "mollusk-svm",
  "sha3",
  "solana-address",
+ "solana-define-syscall 5.2.0",
  "solana-instruction",
  "solana-shake256",
 ]

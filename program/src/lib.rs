@@ -5,11 +5,12 @@ use solana_cpi::set_return_data;
 use solana_program_entrypoint::entrypoint;
 use solana_program_error::{ProgramError, ProgramResult};
 use solana_pubkey::Pubkey;
-use solana_shake::{Shake128, Shake256, TurboShake128, TurboShake256};
+use solana_shake::{KeccakXof, Shake128, Shake256, TurboShake128, TurboShake256, keccak256};
 
 entrypoint!(process_instruction);
 
-// [tag: 1][message]. Tags 0..3 use hash; 4..7 use hashv over two halves.
+// [tag: 1][message]. Tags 0..3 use hash; 4..7 use hashv over two halves;
+// 8 is Keccak-256 over two halves, 9 the second block of a KeccakXof.
 fn process_instruction(_: &Pubkey, _: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let (&tag, data) = data
         .split_first()
@@ -23,6 +24,8 @@ fn process_instruction(_: &Pubkey, _: &[AccountInfo], data: &[u8]) -> ProgramRes
         5 => shake256_hashv(data),
         6 => turboshake128_hashv(data),
         7 => turboshake256_hashv(data),
+        8 => keccak256_hashv(data),
+        9 => keccak_xof(data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
@@ -68,5 +71,19 @@ fn turboshake128_hashv(data: &[u8]) -> ProgramResult {
 fn turboshake256_hashv(data: &[u8]) -> ProgramResult {
     let (left, right) = data.split_at(data.len() / 2);
     set_return_data(&TurboShake256::hashv::<32, 0x1f>(&[left, right]));
+    Ok(())
+}
+
+fn keccak256_hashv(data: &[u8]) -> ProgramResult {
+    let (left, right) = data.split_at(data.len() / 2);
+    set_return_data(&keccak256(&[left, right]));
+    Ok(())
+}
+
+fn keccak_xof(data: &[u8]) -> ProgramResult {
+    let (left, right) = data.split_at(data.len() / 2);
+    let mut xof = KeccakXof::<0x05>::new([left, right]);
+    xof.next_block();
+    set_return_data(&xof.next_block());
     Ok(())
 }
