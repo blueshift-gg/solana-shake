@@ -383,7 +383,7 @@ fn keccak256_and_xof_match_rustcrypto() {
         assert_eq!(solana_shake::keccak256(&[left, right]), keccak(&[&input]));
 
         let seed = [keccak(&[&[0x7f, 0], &input]), keccak(&[&[0x7f, 1], &input])].concat();
-        let mut xof = solana_shake::KeccakXof::<0x7f>::new(&[left, right]);
+        let mut xof = solana_shake::KeccakXof::<0x7f>::new([left, right]);
         for i in 0u64..3 {
             assert_eq!(
                 xof.next_block(),

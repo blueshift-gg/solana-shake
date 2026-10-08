@@ -82,7 +82,7 @@ fn keccak256_hashv(data: &[u8]) -> ProgramResult {
 
 fn keccak_xof(data: &[u8]) -> ProgramResult {
     let (left, right) = data.split_at(data.len() / 2);
-    let mut xof = KeccakXof::<0x05>::new(&[left, right]);
+    let mut xof = KeccakXof::<0x05>::new([left, right]);
     xof.next_block();
     set_return_data(&xof.next_block());
     Ok(())

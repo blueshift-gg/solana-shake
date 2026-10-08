@@ -561,7 +561,7 @@ pub fn keccak256(data: &[&[u8]]) -> [u8; 32] {
 /// resistance of SHAKE256, 256 bits.
 ///
 /// ```compile_fail,E0080
-/// let _ = solana_shake::KeccakXof::<0x80>::new(&[]);
+/// let _ = solana_shake::KeccakXof::<0x80>::new([]);
 /// ```
 #[cfg(feature = "keccak256")]
 pub struct KeccakXof<const DOMAIN: u8> {
@@ -576,17 +576,21 @@ impl<const DOMAIN: u8> KeccakXof<DOMAIN> {
 
     /// Absorb the concatenation of `input`, at most
     /// [`MAX_PARTS`](Self::MAX_PARTS) slices.
+    ///
+    /// ```compile_fail,E0080
+    /// let _ = solana_shake::KeccakXof::<0>::new([&[][..]; 8]);
+    /// ```
     #[inline(always)]
-    pub fn new(input: &[&[u8]]) -> Self {
+    pub fn new<const N: usize>(input: [&[u8]; N]) -> Self {
         const { assert!(DOMAIN <= 0x7f, "DOMAIN must be in 0x00..=0x7f") };
+        const { assert!(N <= Self::MAX_PARTS, "at most MAX_PARTS slices") };
         let mut block = [0; 73];
         block[0] = 0x80;
         for half in 0..2 {
             let prefix = [DOMAIN, half];
             let mut parts: [&[u8]; 8] = [&prefix; 8];
-            parts[1..=input.len()].copy_from_slice(input);
-            block[1 + 32 * half as usize..][..32]
-                .copy_from_slice(&keccak256(&parts[..=input.len()]));
+            parts[1..=N].copy_from_slice(&input);
+            block[1 + 32 * half as usize..][..32].copy_from_slice(&keccak256(&parts[..=N]));
         }
         Self { block }
     }
