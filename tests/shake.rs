@@ -363,3 +363,32 @@ fn hashv_matches_sha3_at_rate_boundaries() {
     const EMPTY: [u8; 32] = Shake256::hashv(&[]);
     assert_eq!(EMPTY.as_slice(), sha3_reference::<sha3::Shake256>(&[], 32));
 }
+
+/// `keccak256` off-chain is this crate's sponge with the `0x01` suffix;
+/// `KeccakXof` is the documented composition of it.
+#[cfg(feature = "keccak256")]
+#[test]
+fn keccak256_and_xof_match_rustcrypto() {
+    use sha3::Digest;
+    let keccak = |parts: &[&[u8]]| -> [u8; 32] {
+        let mut hasher = sha3::Keccak256::new();
+        for part in parts {
+            Digest::update(&mut hasher, part);
+        }
+        hasher.finalize().into()
+    };
+    for length in [0, 1, 135, 136, 137, 272, 1312] {
+        let input = vec![0xa7; length];
+        let (left, right) = input.split_at(length / 3);
+        assert_eq!(solana_shake::keccak256(&[left, right]), keccak(&[&input]));
+
+        let seed = [keccak(&[&[0x7f, 0], &input]), keccak(&[&[0x7f, 1], &input])].concat();
+        let mut xof = solana_shake::KeccakXof::<0x7f>::new(&[left, right]);
+        for i in 0u64..3 {
+            assert_eq!(
+                xof.next_block(),
+                keccak(&[&[0x80], &seed, &i.to_le_bytes()])
+            );
+        }
+    }
+}

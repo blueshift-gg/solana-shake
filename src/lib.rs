@@ -346,9 +346,15 @@ impl<const BITS: usize, const TURBO: bool> Shake<BITS, TURBO> {
             );
             assert!(TURBO || DOMAIN == 0x1f, "SHAKE requires DOMAIN = 0x1f");
         };
+        self.pad(DOMAIN)
+    }
+
+    /// `pad10*1` after the suffix byte `domain`, then the permutation.
+    #[inline(always)]
+    const fn pad(&mut self, domain: u8) -> Xof<'_, BITS, TURBO> {
         let lane = self.pos / 8;
         let shift = 8 * (self.pos % 8);
-        self.state[lane] ^= (DOMAIN as u64) << shift;
+        self.state[lane] ^= (domain as u64) << shift;
         let last = Self::RATE - 1;
         self.state[last / 8] ^= 0x80u64 << (8 * (last % 8));
         keccak_p1600::<TURBO>(&mut self.state);
@@ -500,5 +506,95 @@ impl<const BITS: usize, const TURBO: bool> Xof<'_, BITS, TURBO> {
                 s.pos = 0;
             }
         }
+    }
+}
+
+/// Keccak-256 of the concatenation of `data`: the original Keccak padding
+/// (suffix `0x01`), as Ethereum uses, not SHA3-256. On Solana this is the
+/// `sol_keccak256` syscall; elsewhere, this crate's sponge.
+#[cfg(feature = "keccak256")]
+#[inline(always)]
+pub fn keccak256(data: &[&[u8]]) -> [u8; 32] {
+    #[cfg(target_os = "solana")]
+    {
+        let mut out = core::mem::MaybeUninit::<[u8; 32]>::uninit();
+        // SAFETY: the syscall reads `data.len()` (pointer, length) pairs,
+        // the layout of `&[&[u8]]` on this target, and writes 32 bytes to
+        // `out` before returning. It fails only by aborting the program.
+        unsafe {
+            solana_define_syscall::definitions::sol_keccak256(
+                data as *const _ as *const u8,
+                data.len() as u64,
+                out.as_mut_ptr() as *mut u8,
+            );
+            out.assume_init()
+        }
+    }
+    #[cfg(not(target_os = "solana"))]
+    {
+        let mut sponge = Shake256::new();
+        for part in data {
+            sponge.absorb(part);
+        }
+        let mut out = [0; 32];
+        sponge.pad(0x01).squeeze(&mut out);
+        out
+    }
+}
+
+/// An extendable-output function built from [`keccak256`] calls, for
+/// programs where a syscall is far cheaper than a software permutation:
+///
+/// ```text
+/// seed     = keccak256(DOMAIN ‖ 0x00 ‖ input) ‖ keccak256(DOMAIN ‖ 0x01 ‖ input)
+/// block(i) = keccak256(0x80 ‖ seed ‖ i as u64 LE)
+/// output   = block(0) ‖ block(1) ‖ …
+/// ```
+///
+/// `DOMAIN` is at most `0x7f`, so no seed call shares an input with a block
+/// call, and uses with different `DOMAIN` are independent. This is not
+/// SHAKE and matches no standard. It is the domain extender
+/// `h2(h1(x), i)`: with Keccak-256 a random oracle it is indifferentiable
+/// from a random oracle, and the 512-bit seed gives it the collision
+/// resistance of SHAKE256, 256 bits.
+///
+/// ```compile_fail,E0080
+/// let _ = solana_shake::KeccakXof::<0x80>::new(&[]);
+/// ```
+#[cfg(feature = "keccak256")]
+pub struct KeccakXof<const DOMAIN: u8> {
+    /// `0x80 ‖ seed ‖ counter`, the next block's input.
+    block: [u8; 73],
+}
+
+#[cfg(feature = "keccak256")]
+impl<const DOMAIN: u8> KeccakXof<DOMAIN> {
+    /// Most slices `new` accepts.
+    pub const MAX_PARTS: usize = 7;
+
+    /// Absorb the concatenation of `input`, at most
+    /// [`MAX_PARTS`](Self::MAX_PARTS) slices.
+    #[inline(always)]
+    pub fn new(input: &[&[u8]]) -> Self {
+        const { assert!(DOMAIN <= 0x7f, "DOMAIN must be in 0x00..=0x7f") };
+        let mut block = [0; 73];
+        block[0] = 0x80;
+        for half in 0..2 {
+            let prefix = [DOMAIN, half];
+            let mut parts: [&[u8]; 8] = [&prefix; 8];
+            parts[1..=input.len()].copy_from_slice(input);
+            block[1 + 32 * half as usize..][..32]
+                .copy_from_slice(&keccak256(&parts[..=input.len()]));
+        }
+        Self { block }
+    }
+
+    /// The next 32 output bytes.
+    #[inline(always)]
+    pub fn next_block(&mut self) -> [u8; 32] {
+        let out = keccak256(&[&self.block]);
+        let counter = u64::from_le_bytes(self.block[65..].try_into().unwrap()) + 1;
+        self.block[65..].copy_from_slice(&counter.to_le_bytes());
+        out
     }
 }

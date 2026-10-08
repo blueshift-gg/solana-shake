@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-solana-shake = { path = ".." }
+solana-shake = { path = "..", features = ["keccak256"] }
 solana-account-info = "3.1.1"
 solana-cpi = "3.1.0"
 solana-program-entrypoint = "3.1.1"
