@@ -552,7 +552,9 @@ pub fn keccak256(data: &[&[u8]]) -> [u8; 32] {
 /// ```
 ///
 /// `DOMAIN` is at most `0x7f`, so no seed call shares an input with a block
-/// call, and uses with different `DOMAIN` are independent. This is not
+/// call, and uses with different `DOMAIN` are independent. The byte is one
+/// namespace for every user of this function: a scheme takes a value no
+/// other scheme has and names it as a constant. This is not
 /// SHAKE and matches no standard. It is the domain extender
 /// `h2(h1(x), i)`: with Keccak-256 a random oracle it is indifferentiable
 /// from a random oracle, and the 512-bit seed gives it the collision
