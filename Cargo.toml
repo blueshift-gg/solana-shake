@@ -9,7 +9,7 @@ license = "MIT"
 keywords = ["shake128", "shake256", "keccak", "sha3", "solana"]
 categories = ["cryptography", "no-std"]
 readme = "README.md"
-exclude = [".github/", ".gitignore", "tests/", "program/", "internal-tests/"]
+exclude = [".github/", ".gitignore", "tests/", "program/", "internal-tests/", "formal_verification/"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(kani_absorb)"] }
