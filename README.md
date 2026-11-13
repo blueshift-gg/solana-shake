@@ -87,6 +87,31 @@ SBPF tests require `cargo-build-sbf 4.2.0`. JavaScript callers can use
 
 Not independently audited.
 
+## Verification
+
+The permutation uses Bertoni lane complementing, so it is checked against a
+plain FIPS 202 transcription (`internal-tests/reference.rs`) two ways:
+
+- **Lean** (`formal_verification/`, core Lean 4.15, no Mathlib, no
+  `native_decide`): `keccak_p1600::<false>` is Keccak-p[1600, 24] and
+  `keccak_p1600::<true>` is Keccak-p[1600, 12] for every state. The spec
+  derives ρ and π from the FIPS 202 formulas and the round constants from
+  its LFSR.
+- **Kani** on the Rust code itself: one complemented round equals the
+  reference round for every state and round constant; `finalize`'s padding,
+  `rate_lanes` and `permute` match the reference for every `pos`; `squeeze`
+  matches a byte-at-a-time reference for 1, 7, 8, 9 and 17 bytes from any
+  `pos` and for any permutation. `absorb` is covered by differential tests
+  for now (its Kani harnesses do not finish yet).
+
+```sh
+cd formal_verification && lake build
+cargo kani -Z stubbing --harness bertoni_round_equals_reference_round \
+    --harness complement_lanes_is_the_cs_involution --harness new_is_empty \
+    --harness finalize_ --harness rate_lanes_and_permute_
+cargo kani -Z stubbing --harness kani_proofs::squeeze_shake256_9 --exact
+```
+
 ## License
 
 [MIT](LICENSE).
