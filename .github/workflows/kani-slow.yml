@@ -1,0 +1,61 @@
+name: Kani (sponge)
+
+# The bounded squeeze proofs take minutes each, so they run only when the code
+# or the proofs change, one job per harness, and on demand. The fast proofs
+# (permutation, finalize, rate_lanes/permute) run in ci.yml on every PR.
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "internal-tests/**"
+      - "Cargo.toml"
+      - ".github/workflows/kani-slow.yml"
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "internal-tests/**"
+      - "Cargo.toml"
+      - ".github/workflows/kani-slow.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  squeeze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        harness:
+          - squeeze_shake128_1
+          - squeeze_shake128_7
+          - squeeze_shake128_8
+          - squeeze_shake128_9
+          - squeeze_shake128_17
+          - squeeze_shake256_1
+          - squeeze_shake256_7
+          - squeeze_shake256_8
+          - squeeze_shake256_9
+          - squeeze_shake256_17
+          - squeeze_turboshake128_1
+          - squeeze_turboshake128_7
+          - squeeze_turboshake128_8
+          - squeeze_turboshake128_9
+          - squeeze_turboshake128_17
+          - squeeze_turboshake256_1
+          - squeeze_turboshake256_7
+          - squeeze_turboshake256_8
+          - squeeze_turboshake256_9
+          - squeeze_turboshake256_17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: model-checking/kani-github-action@v1
+        with:
+          kani-version: '0.67.0'
+          args: -Z stubbing --harness kani_proofs::${{ matrix.harness }} --exact

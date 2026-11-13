@@ -1,0 +1,6 @@
+name = "SolanaShake"
+version = "0.1.0"
+defaultTargets = ["SolanaShake"]
+
+[[lean_lib]]
+name = "SolanaShake"

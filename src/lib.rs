@@ -1,6 +1,16 @@
 #![doc = include_str!("../README.md")]
 #![no_std]
 
+#[cfg(any(test, kani))]
+// Tests and Kani harnesses each use a different part of the reference.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "../internal-tests/reference.rs"]
+mod reference;
+
+#[cfg(kani)]
+#[path = "../internal-tests/kani_proofs.rs"]
+mod kani_proofs;
+
 const RC: [u64; 24] = [
     0x0000000000000001,
     0x0000000000008082,
@@ -28,11 +38,29 @@ const RC: [u64; 24] = [
     0x8000000080008008,
 ];
 
-/// Keccak-p[1600, 24], i.e. Keccak-f[1600], when `TURBO` is false; the last
-/// twelve rounds with their constants `RC[12..24]` (Keccak-p[1600, 12], RFC
-/// 9861) when it is true. The lane-complementing pattern is invariant per
-/// round, so the entry and exit complements are the same for both.
-const fn keccak_p1600<const TURBO: bool>(s: &mut [u64; 25]) {
+/// The lanes held complemented while the rounds run (Bertoni
+/// lane-complementing): the canonical Keccak Team set
+/// `CS = {1, 2, 8, 12, 17, 20}`.
+const COMPLEMENTED: [usize; 6] = [1, 2, 8, 12, 17, 20];
+
+/// Complement the [`COMPLEMENTED`] lanes. Applied on entry to the
+/// permutation and again on exit, so the caller sees the normal
+/// (uncomplemented) state; cost paid once each per permute.
+#[inline(always)]
+const fn complement_lanes(s: &mut [u64; 25]) {
+    s[COMPLEMENTED[0]] = !s[COMPLEMENTED[0]];
+    s[COMPLEMENTED[1]] = !s[COMPLEMENTED[1]];
+    s[COMPLEMENTED[2]] = !s[COMPLEMENTED[2]];
+    s[COMPLEMENTED[3]] = !s[COMPLEMENTED[3]];
+    s[COMPLEMENTED[4]] = !s[COMPLEMENTED[4]];
+    s[COMPLEMENTED[5]] = !s[COMPLEMENTED[5]];
+}
+
+/// One Keccak round (theta, rho, pi, chi, then iota with the constant `rc`)
+/// on a state whose [`COMPLEMENTED`] lanes are held complemented; they are
+/// still complemented afterwards.
+#[inline(always)]
+const fn bertoni_round(s: &mut [u64; 25], rc: u64) {
     // **Bertoni lane-complementing + chi-row** layout.
     //
     // Pre-complement the canonical 6-lane Keccak Team set
@@ -47,157 +75,149 @@ const fn keccak_p1600<const TURBO: bool>(s: &mut [u64; 25]) {
     //     row 3: x=2          row 4: x=0
     // Net ~456 NOTs eliminated per 24-round permute, ~12 added at boundaries.
 
-    // Entry: complement the 6 CS lanes once.
-    s[1] = !s[1];
-    s[2] = !s[2];
-    s[8] = !s[8];
-    s[12] = !s[12];
-    s[17] = !s[17];
-    s[20] = !s[20];
+    // theta — column parities
+    let c0 = s[0] ^ s[5] ^ s[10] ^ s[15] ^ s[20];
+    let c1 = s[1] ^ s[6] ^ s[11] ^ s[16] ^ s[21];
+    let c2 = s[2] ^ s[7] ^ s[12] ^ s[17] ^ s[22];
+    let c3 = s[3] ^ s[8] ^ s[13] ^ s[18] ^ s[23];
+    let c4 = s[4] ^ s[9] ^ s[14] ^ s[19] ^ s[24];
 
-    macro_rules! round {
-        ($rc:expr) => {{
-            // theta — column parities
-            let c0 = s[0] ^ s[5] ^ s[10] ^ s[15] ^ s[20];
-            let c1 = s[1] ^ s[6] ^ s[11] ^ s[16] ^ s[21];
-            let c2 = s[2] ^ s[7] ^ s[12] ^ s[17] ^ s[22];
-            let c3 = s[3] ^ s[8] ^ s[13] ^ s[18] ^ s[23];
-            let c4 = s[4] ^ s[9] ^ s[14] ^ s[19] ^ s[24];
+    let d0 = c4 ^ c1.rotate_left(1);
+    let d1 = c0 ^ c2.rotate_left(1);
+    let d2 = c1 ^ c3.rotate_left(1);
+    let d3 = c2 ^ c4.rotate_left(1);
+    let d4 = c3 ^ c0.rotate_left(1);
 
-            let d0 = c4 ^ c1.rotate_left(1);
-            let d1 = c0 ^ c2.rotate_left(1);
-            let d2 = c1 ^ c3.rotate_left(1);
-            let d3 = c2 ^ c4.rotate_left(1);
-            let d4 = c3 ^ c0.rotate_left(1);
+    // **In-place chi-row + 10 cell-saves**.
+    // Row 0 outputs to s[0..5]; rows 1..4 read s[3], s[1], s[4], s[2]
+    // from this range — save before overwriting.
+    let s3 = s[3];
+    let s1 = s[1];
+    let s4 = s[4];
+    let s2 = s[2];
 
-            // **In-place chi-row + 10 cell-saves**.
-            // Row 0 outputs to s[0..5]; rows 1..4 read s[3], s[1], s[4], s[2]
-            // from this range — save before overwriting.
-            let s3 = s[3];
-            let s1 = s[1];
-            let s4 = s[4];
-            let s2 = s[2];
-
-            // Row 0 — IN: b0,b2,b3 complemented; OUT-complement: x=1,2.
-            // Iota fused into lane 0.
-            {
-                let b0 = s[0] ^ d0;
-                let b1 = (s[6] ^ d1).rotate_left(44);
-                let b2 = (s[12] ^ d2).rotate_left(43);
-                let b3 = (s[18] ^ d3).rotate_left(21);
-                let b4 = (s[24] ^ d4).rotate_left(14);
-                s[0] = b0 ^ (b1 | b2) ^ $rc;
-                s[1] = b1 ^ ((!b2) | b3);
-                s[2] = b2 ^ (b3 & b4);
-                s[3] = b3 ^ (b4 | b0);
-                s[4] = b4 ^ (b0 & b1);
-            }
-
-            // Row 1 outputs to s[5..10]; rows 2..4 read s[7], s[5], s[8].
-            let s7 = s[7];
-            let s5 = s[5];
-            let s8 = s[8];
-
-            // Row 1 — IN: b0,b2 complemented; OUT-complement: x=3.
-            {
-                let b0 = (s3 ^ d3).rotate_left(28);
-                let b1 = (s[9] ^ d4).rotate_left(20);
-                let b2 = (s[10] ^ d0).rotate_left(3);
-                let b3 = (s[16] ^ d1).rotate_left(45);
-                let b4 = (s[22] ^ d2).rotate_left(61);
-                s[5] = b0 ^ (b1 | b2);
-                s[6] = b1 ^ (b2 & b3);
-                s[7] = (!b2) ^ b4 ^ (b3 & b4);
-                s[8] = b3 ^ (b4 | b0);
-                s[9] = b4 ^ (b0 & b1);
-            }
-
-            // Row 2 outputs to s[10..15]; rows 3..4 read s[11], s[14].
-            let s11 = s[11];
-            let s14 = s[14];
-
-            // Row 2 — IN: b0,b2 complemented; OUT-complement: x=2.
-            {
-                let b0 = (s1 ^ d1).rotate_left(1);
-                let b1 = (s7 ^ d2).rotate_left(6);
-                let b2 = (s[13] ^ d3).rotate_left(25);
-                let b3 = (s[19] ^ d4).rotate_left(8);
-                let b4 = (s[20] ^ d0).rotate_left(18);
-                s[10] = b0 ^ (b1 | b2);
-                s[11] = b1 ^ (b2 & b3);
-                s[12] = b2 ^ b4 ^ (b3 & b4);
-                s[13] = b3 ^ !(b4 | b0);
-                s[14] = b4 ^ (b0 & b1);
-            }
-
-            // Row 3 outputs to s[15..20]; row 4 reads s[15].
-            let s15 = s[15];
-
-            // Row 3 — IN: b1,b3,b4 complemented; OUT-complement: x=2.
-            {
-                let b0 = (s4 ^ d4).rotate_left(27);
-                let b1 = (s5 ^ d0).rotate_left(36);
-                let b2 = (s11 ^ d1).rotate_left(10);
-                let b3 = (s[17] ^ d2).rotate_left(15);
-                let b4 = (s[23] ^ d3).rotate_left(56);
-                s[15] = b0 ^ (b1 & b2);
-                s[16] = b1 ^ (b2 | b3);
-                s[17] = b2 ^ ((!b3) | b4);
-                s[18] = (!b3) ^ (b4 & b0);
-                s[19] = b4 ^ (b0 | b1);
-            }
-
-            // Row 4 — IN: b0,b3 complemented; OUT-complement: x=0.
-            {
-                let b0 = (s2 ^ d2).rotate_left(62);
-                let b1 = (s8 ^ d3).rotate_left(55);
-                let b2 = (s14 ^ d4).rotate_left(39);
-                let b3 = (s15 ^ d0).rotate_left(41);
-                let b4 = (s[21] ^ d1).rotate_left(2);
-                s[20] = b0 ^ b2 ^ (b1 & b2);
-                s[21] = b1 ^ !(b2 | b3);
-                s[22] = b2 ^ (b3 & b4);
-                s[23] = b3 ^ (b4 | b0);
-                s[24] = b4 ^ (b0 & b1);
-            }
-        }};
+    // Row 0 — IN: b0,b2,b3 complemented; OUT-complement: x=1,2.
+    // Iota fused into lane 0.
+    {
+        let b0 = s[0] ^ d0;
+        let b1 = (s[6] ^ d1).rotate_left(44);
+        let b2 = (s[12] ^ d2).rotate_left(43);
+        let b3 = (s[18] ^ d3).rotate_left(21);
+        let b4 = (s[24] ^ d4).rotate_left(14);
+        s[0] = b0 ^ (b1 | b2) ^ rc;
+        s[1] = b1 ^ ((!b2) | b3);
+        s[2] = b2 ^ (b3 & b4);
+        s[3] = b3 ^ (b4 | b0);
+        s[4] = b4 ^ (b0 & b1);
     }
+
+    // Row 1 outputs to s[5..10]; rows 2..4 read s[7], s[5], s[8].
+    let s7 = s[7];
+    let s5 = s[5];
+    let s8 = s[8];
+
+    // Row 1 — IN: b0,b2 complemented; OUT-complement: x=3.
+    {
+        let b0 = (s3 ^ d3).rotate_left(28);
+        let b1 = (s[9] ^ d4).rotate_left(20);
+        let b2 = (s[10] ^ d0).rotate_left(3);
+        let b3 = (s[16] ^ d1).rotate_left(45);
+        let b4 = (s[22] ^ d2).rotate_left(61);
+        s[5] = b0 ^ (b1 | b2);
+        s[6] = b1 ^ (b2 & b3);
+        s[7] = (!b2) ^ b4 ^ (b3 & b4);
+        s[8] = b3 ^ (b4 | b0);
+        s[9] = b4 ^ (b0 & b1);
+    }
+
+    // Row 2 outputs to s[10..15]; rows 3..4 read s[11], s[14].
+    let s11 = s[11];
+    let s14 = s[14];
+
+    // Row 2 — IN: b0,b2 complemented; OUT-complement: x=2.
+    {
+        let b0 = (s1 ^ d1).rotate_left(1);
+        let b1 = (s7 ^ d2).rotate_left(6);
+        let b2 = (s[13] ^ d3).rotate_left(25);
+        let b3 = (s[19] ^ d4).rotate_left(8);
+        let b4 = (s[20] ^ d0).rotate_left(18);
+        s[10] = b0 ^ (b1 | b2);
+        s[11] = b1 ^ (b2 & b3);
+        s[12] = b2 ^ b4 ^ (b3 & b4);
+        s[13] = b3 ^ !(b4 | b0);
+        s[14] = b4 ^ (b0 & b1);
+    }
+
+    // Row 3 outputs to s[15..20]; row 4 reads s[15].
+    let s15 = s[15];
+
+    // Row 3 — IN: b1,b3,b4 complemented; OUT-complement: x=2.
+    {
+        let b0 = (s4 ^ d4).rotate_left(27);
+        let b1 = (s5 ^ d0).rotate_left(36);
+        let b2 = (s11 ^ d1).rotate_left(10);
+        let b3 = (s[17] ^ d2).rotate_left(15);
+        let b4 = (s[23] ^ d3).rotate_left(56);
+        s[15] = b0 ^ (b1 & b2);
+        s[16] = b1 ^ (b2 | b3);
+        s[17] = b2 ^ ((!b3) | b4);
+        s[18] = (!b3) ^ (b4 & b0);
+        s[19] = b4 ^ (b0 | b1);
+    }
+
+    // Row 4 — IN: b0,b3 complemented; OUT-complement: x=0.
+    {
+        let b0 = (s2 ^ d2).rotate_left(62);
+        let b1 = (s8 ^ d3).rotate_left(55);
+        let b2 = (s14 ^ d4).rotate_left(39);
+        let b3 = (s15 ^ d0).rotate_left(41);
+        let b4 = (s[21] ^ d1).rotate_left(2);
+        s[20] = b0 ^ b2 ^ (b1 & b2);
+        s[21] = b1 ^ !(b2 | b3);
+        s[22] = b2 ^ (b3 & b4);
+        s[23] = b3 ^ (b4 | b0);
+        s[24] = b4 ^ (b0 & b1);
+    }
+}
+
+/// Keccak-p[1600, 24], i.e. Keccak-f[1600], when `TURBO` is false; the last
+/// twelve rounds with their constants `RC[12..24]` (Keccak-p[1600, 12], RFC
+/// 9861) when it is true. The lane-complementing pattern is invariant per
+/// round, so the entry and exit complements are the same for both.
+const fn keccak_p1600<const TURBO: bool>(s: &mut [u64; 25]) {
+    // Entry: complement the 6 CS lanes once.
+    complement_lanes(s);
 
     if !TURBO {
-        round!(RC[0]);
-        round!(RC[1]);
-        round!(RC[2]);
-        round!(RC[3]);
-        round!(RC[4]);
-        round!(RC[5]);
-        round!(RC[6]);
-        round!(RC[7]);
-        round!(RC[8]);
-        round!(RC[9]);
-        round!(RC[10]);
-        round!(RC[11]);
+        bertoni_round(s, RC[0]);
+        bertoni_round(s, RC[1]);
+        bertoni_round(s, RC[2]);
+        bertoni_round(s, RC[3]);
+        bertoni_round(s, RC[4]);
+        bertoni_round(s, RC[5]);
+        bertoni_round(s, RC[6]);
+        bertoni_round(s, RC[7]);
+        bertoni_round(s, RC[8]);
+        bertoni_round(s, RC[9]);
+        bertoni_round(s, RC[10]);
+        bertoni_round(s, RC[11]);
     }
-    round!(RC[12]);
-    round!(RC[13]);
-    round!(RC[14]);
-    round!(RC[15]);
-    round!(RC[16]);
-    round!(RC[17]);
-    round!(RC[18]);
-    round!(RC[19]);
-    round!(RC[20]);
-    round!(RC[21]);
-    round!(RC[22]);
-    round!(RC[23]);
+    bertoni_round(s, RC[12]);
+    bertoni_round(s, RC[13]);
+    bertoni_round(s, RC[14]);
+    bertoni_round(s, RC[15]);
+    bertoni_round(s, RC[16]);
+    bertoni_round(s, RC[17]);
+    bertoni_round(s, RC[18]);
+    bertoni_round(s, RC[19]);
+    bertoni_round(s, RC[20]);
+    bertoni_round(s, RC[21]);
+    bertoni_round(s, RC[22]);
+    bertoni_round(s, RC[23]);
 
     // Exit: un-complement the 6 CS lanes so the caller sees the normal
     // (uncomplemented) state. Cost paid once per permute.
-    s[1] = !s[1];
-    s[2] = !s[2];
-    s[8] = !s[8];
-    s[12] = !s[12];
-    s[17] = !s[17];
-    s[20] = !s[20];
+    complement_lanes(s);
 }
 
 /// SHAKE128 rate in bytes (1600-bit state − 2·128-bit capacity = 1344 bits).
