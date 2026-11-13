@@ -15,7 +15,7 @@ protocols whose specification fixes SHAKE.
 
 ```toml
 [dependencies]
-solana-shake = { git = "https://github.com/blueshift-gg/solana-shake", branch = "turboshake" }
+solana-shake = "0.1.0"
 ```
 
 ```rust
