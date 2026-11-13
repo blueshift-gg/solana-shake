@@ -1,7 +1,7 @@
 [package]
 name = "solana-shake"
 authors = ["Dean Little <@deanmlittle>"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A no_std, SVM-optimized SHAKE and TurboSHAKE library."
 repository = "https://github.com/blueshift-gg/solana-shake"
@@ -12,7 +12,7 @@ readme = "README.md"
 exclude = [".github/", ".gitignore", "tests/", "program/", "internal-tests/", "formal_verification/"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(kani_absorb)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(solana_shake_kani)", "cfg(kani_absorb)"] }
 
 [dev-dependencies]
 sha3 = "0.10"

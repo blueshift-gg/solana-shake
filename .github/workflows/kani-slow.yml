@@ -21,7 +21,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  RUSTFLAGS: -D warnings --cfg solana_shake_kani
 
 jobs:
   squeeze:
