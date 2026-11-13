@@ -101,8 +101,9 @@ plain FIPS 202 transcription (`internal-tests/reference.rs`) two ways:
   reference round for every state and round constant; `finalize`'s padding,
   `rate_lanes` and `permute` match the reference for every `pos`; `squeeze`
   matches a byte-at-a-time reference for 1, 7, 8, 9 and 17 bytes from any
-  `pos` and for any permutation. `absorb` is covered by differential tests
-  for now (its Kani harnesses do not finish yet).
+  `pos` and for any permutation, and `absorb` of the same lengths matches
+  the reference likewise. Longer inputs and outputs are covered by the
+  differential tests.
 
 ```sh
 cd formal_verification && lake build
@@ -110,7 +111,7 @@ export RUSTFLAGS="--cfg solana_shake_kani"
 cargo kani -Z stubbing --harness bertoni_round_equals_reference_round \
     --harness complement_lanes_is_the_cs_involution --harness new_is_empty \
     --harness finalize_ --harness rate_lanes_and_permute_
-cargo kani -Z stubbing --harness kani_proofs::squeeze_shake256_9 --exact
+cargo kani -Z stubbing --harness kani_proofs::absorb_shake256_9 --exact
 ```
 
 ## License

@@ -1,7 +1,7 @@
 name: Kani (sponge)
 
-# The bounded squeeze proofs take minutes each, so they run only when the code
-# or the proofs change, one job per harness, and on demand. The fast proofs
+# The bounded absorb and squeeze proofs take minutes each, so they run only
+# when the code or the proofs change, one job per harness, and on demand. The fast proofs
 # (permutation, finalize, rate_lanes/permute) run in ci.yml on every PR.
 on:
   pull_request:
@@ -24,13 +24,33 @@ env:
   RUSTFLAGS: -D warnings --cfg solana_shake_kani
 
 jobs:
-  squeeze:
+  sponge:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         harness:
+          - absorb_shake128_1
+          - absorb_shake128_7
+          - absorb_shake128_8
+          - absorb_shake128_9
+          - absorb_shake128_17
+          - absorb_shake256_1
+          - absorb_shake256_7
+          - absorb_shake256_8
+          - absorb_shake256_9
+          - absorb_shake256_17
+          - absorb_turboshake128_1
+          - absorb_turboshake128_7
+          - absorb_turboshake128_8
+          - absorb_turboshake128_9
+          - absorb_turboshake128_17
+          - absorb_turboshake256_1
+          - absorb_turboshake256_7
+          - absorb_turboshake256_8
+          - absorb_turboshake256_9
+          - absorb_turboshake256_17
           - squeeze_shake128_1
           - squeeze_shake128_7
           - squeeze_shake128_8
