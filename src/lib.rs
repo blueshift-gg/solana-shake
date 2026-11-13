@@ -1,13 +1,15 @@
 #![doc = include_str!("../README.md")]
 #![no_std]
 
-#[cfg(any(test, kani))]
+// Kani compiles dependencies with `cfg(kani)` too, and `internal-tests/` is not
+// in the published crate, so the proofs need a cfg only this repo's CI sets.
+#[cfg(any(test, all(kani, solana_shake_kani)))]
 // Tests and Kani harnesses each use a different part of the reference.
 #[cfg_attr(not(test), allow(dead_code))]
 #[path = "../internal-tests/reference.rs"]
 mod reference;
 
-#[cfg(kani)]
+#[cfg(all(kani, solana_shake_kani))]
 #[path = "../internal-tests/kani_proofs.rs"]
 mod kani_proofs;
 

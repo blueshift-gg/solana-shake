@@ -15,7 +15,7 @@ protocols whose specification fixes SHAKE.
 
 ```toml
 [dependencies]
-solana-shake = "0.1.0"
+solana-shake = "0.1.1"
 ```
 
 ```rust
@@ -106,6 +106,7 @@ plain FIPS 202 transcription (`internal-tests/reference.rs`) two ways:
 
 ```sh
 cd formal_verification && lake build
+export RUSTFLAGS="--cfg solana_shake_kani"
 cargo kani -Z stubbing --harness bertoni_round_equals_reference_round \
     --harness complement_lanes_is_the_cs_involution --harness new_is_empty \
     --harness finalize_ --harness rate_lanes_and_permute_

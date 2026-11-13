@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "solana-shake"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mollusk-svm",
  "sha3",

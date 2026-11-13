@@ -5,20 +5,20 @@
 //! FAST (every PR, about a minute in total):
 //!
 //! ```text
-//! cargo kani -Z stubbing --harness bertoni_round_equals_reference_round \
+//! RUSTFLAGS="--cfg solana_shake_kani" cargo kani -Z stubbing --harness bertoni_round_equals_reference_round \
 //!     --harness complement_lanes_is_the_cs_involution --harness new_is_empty \
 //!     --harness finalize_ --harness rate_lanes_and_permute_
 //! ```
 //!
 //! SLOW (CI runs these only when `src/` or these proofs change, one job per
 //! harness, or on manual dispatch; minutes each): every `squeeze_*` harness,
-//! e.g. `cargo kani -Z stubbing --harness kani_proofs::squeeze_shake256_9 --exact`.
+//! e.g. `RUSTFLAGS="--cfg solana_shake_kani" cargo kani -Z stubbing --harness kani_proofs::squeeze_shake256_9 --exact`.
 //!
 //! NOT YET COMPLETING: the `absorb_*` harnesses. They are written and bounded
 //! as described below, but CBMC did not finish them within 20 minutes (bound
 //! 10) or 40 minutes (bound 17), so they are compiled only with
-//! `RUSTFLAGS="--cfg kani_absorb"` and are not in CI. The plan is to replace
-//! the unrolled form with Kani loop contracts. Until then `absorb` is covered
+//! `RUSTFLAGS="--cfg solana_shake_kani --cfg kani_absorb"` and are not in CI.
+//! The plan is to replace the unrolled form with Kani loop contracts. Until then `absorb` is covered
 //! by the differential tests against the byte-at-a-time reference and `sha3`.
 //!
 //! Proved for all inputs (every state, round constant and `pos < RATE`):

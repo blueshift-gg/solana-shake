@@ -53,6 +53,8 @@ jobs:
   # absorb/squeeze proofs run in kani-slow.yml.
   kani:
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings --cfg solana_shake_kani
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
