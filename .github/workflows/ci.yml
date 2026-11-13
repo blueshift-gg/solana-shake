@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, turboshake]
   pull_request:
 
 env:
@@ -11,7 +11,6 @@ env:
 
 jobs:
   fmt:
-    name: cargo +nightly fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +20,6 @@ jobs:
       - run: cargo +nightly fmt --all -- --check
 
   clippy:
-    name: cargo +nightly clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,15 +27,23 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly clippy --all-targets -- -D warnings
+      - run: cargo +nightly clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: cargo test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The KAT / cross-path tests live in `tests/` (excluded from the
-      # published tarball), so run the full suite, not `--lib`.
-      - run: cargo test
+      - run: cargo test --lib --test kat --test shake --test turboshake
+      - run: cargo test --doc
+
+  sbpf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked cargo-build-sbf --version 4.2.0
+      - run: cargo build-sbf --arch v3 --manifest-path program/Cargo.toml
+      - run: cargo test --test sbpf -- --nocapture --test-threads=1
