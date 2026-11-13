@@ -11,15 +11,14 @@
 //! ```
 //!
 //! SLOW (CI runs these only when `src/` or these proofs change, one job per
-//! harness, or on manual dispatch; minutes each): every `squeeze_*` harness,
-//! e.g. `RUSTFLAGS="--cfg solana_shake_kani" cargo kani -Z stubbing --harness kani_proofs::squeeze_shake256_9 --exact`.
+//! harness, or on manual dispatch; minutes each): every `absorb_*` and
+//! `squeeze_*` harness, e.g.
+//! `RUSTFLAGS="--cfg solana_shake_kani" cargo kani -Z stubbing --harness kani_proofs::absorb_shake256_9 --exact`.
 //!
-//! NOT YET COMPLETING: the `absorb_*` harnesses. They are written and bounded
-//! as described below, but CBMC did not finish them within 20 minutes (bound
-//! 10) or 40 minutes (bound 17), so they are compiled only with
-//! `RUSTFLAGS="--cfg solana_shake_kani --cfg kani_absorb"` and are not in CI.
-//! The plan is to replace the unrolled form with Kani loop contracts. Until then `absorb` is covered
-//! by the differential tests against the byte-at-a-time reference and `sha3`.
+//! The lengths are concrete. A symbolic length (any 0..=10 bytes) did not
+//! finish in 20 minutes; 9 concrete bytes take about 4. Kani's loop
+//! contracts (0.67) would make these unbounded, but they lose the slice
+//! pointers that `absorb`'s phase-2 loop walks, so they do not apply yet.
 //!
 //! Proved for all inputs (every state, round constant and `pos < RATE`):
 //!
@@ -42,12 +41,13 @@
 //! Bounded (arbitrary state, arbitrary `pos < RATE`, arbitrary
 //! permutation via the [`Oracle`] stub):
 //!
-//! * `absorb_*` (opt-in, see above; not yet completing): absorbing any 0..=10 bytes equals the byte-at-a-time
-//!   reference (state, `pos`, and the permutation call). 10 bytes from any
-//!   `pos` exercise phase 1 running into a lane boundary, a full phase-2
-//!   lane, a phase-3 tail, and, for `pos` near `RATE`, a permutation inside
-//!   phase 1 and inside phase 2. (Phase 3 starts lane-aligned with fewer
-//!   than 8 bytes, so it can never reach the rate boundary.)
+//! * `absorb_*_{1,7,8,9,17}`: absorbing that many bytes equals the
+//!   byte-at-a-time reference (state, `pos`, and the permutation call).
+//!   From any `pos` these cover phase 1 alone, phase 1 running into a lane
+//!   boundary, a full phase-2 lane, two, a phase-3 tail, and, for `pos`
+//!   near `RATE`, a permutation inside phase 1 and inside phase 2. (Phase 3
+//!   starts lane-aligned with fewer than 8 bytes, so it never reaches the
+//!   rate boundary.)
 //! * `squeeze_*_{1,7,8,9,17}`: `squeeze::<LEN>` equals the reference
 //!   (bytes, state, `pos`, permutation call), likewise from any `pos`.
 //!
@@ -184,34 +184,30 @@ fn stub_p1600<const TURBO: bool>(s: &mut [u64; 25]) {
     o.calls[run] = 1;
 }
 
-#[cfg(kani_absorb)]
+/// `absorb` of exactly `LEN` bytes (a concrete length, as for `squeeze_*`;
+/// a symbolic length made CBMC an order of magnitude slower) from any state
+/// and `pos < RATE` equals the byte-at-a-time reference.
 macro_rules! absorb_harness {
-    ($name:ident, $bits:literal, $turbo:literal) => {
+    ($name:ident, $bits:literal, $turbo:literal, $len:expr, $unwind:literal) => {
         #[kani::proof]
         #[kani::stub(crate::keccak_p1600, stub_p1600)]
-        #[kani::unwind(12)]
+        #[kani::unwind($unwind)]
         fn $name() {
             const RATE: usize = Shake::<$bits, $turbo>::RATE;
-            const MAX: usize = 10;
+            const LEN: usize = $len;
             let state: [u64; 25] = kani::any();
             let pos: usize = kani::any();
             kani::assume(pos < RATE);
-            let buf: [u8; MAX] = kani::any();
-            let len: usize = kani::any();
-            kani::assume(len <= MAX);
-            let data = &buf[..len];
-            kani::cover!(pos % 8 == 7 && len == MAX, "phases 1, 2 and 3");
-            kani::cover!(pos % 8 != 0 && pos + len >= RATE, "permute in phase 1");
-            kani::cover!(pos + 8 == RATE && len >= 8, "permute in phase 2");
+            let data: [u8; LEN] = kani::any();
 
             let mut s = Shake::<$bits, $turbo> { state, pos };
             oracle_init($turbo);
-            s.absorb(data);
+            s.absorb(&data);
             assert!(s.pos < RATE);
 
             oracle_switch();
             let mut r = RefSponge::<RATE> { state, pos };
-            r.absorb(data, stub_p1600::<$turbo>);
+            r.absorb(&data, stub_p1600::<$turbo>);
 
             oracle_check();
             assert!(s.pos == r.pos);
@@ -220,14 +216,26 @@ macro_rules! absorb_harness {
     };
 }
 
-#[cfg(kani_absorb)]
-absorb_harness!(absorb_shake128, 128, false);
-#[cfg(kani_absorb)]
-absorb_harness!(absorb_shake256, 256, false);
-#[cfg(kani_absorb)]
-absorb_harness!(absorb_turboshake128, 128, true);
-#[cfg(kani_absorb)]
-absorb_harness!(absorb_turboshake256, 256, true);
+absorb_harness!(absorb_shake128_1, 128, false, 1, 3);
+absorb_harness!(absorb_shake128_7, 128, false, 7, 9);
+absorb_harness!(absorb_shake128_8, 128, false, 8, 10);
+absorb_harness!(absorb_shake128_9, 128, false, 9, 11);
+absorb_harness!(absorb_shake128_17, 128, false, 17, 19);
+absorb_harness!(absorb_shake256_1, 256, false, 1, 3);
+absorb_harness!(absorb_shake256_7, 256, false, 7, 9);
+absorb_harness!(absorb_shake256_8, 256, false, 8, 10);
+absorb_harness!(absorb_shake256_9, 256, false, 9, 11);
+absorb_harness!(absorb_shake256_17, 256, false, 17, 19);
+absorb_harness!(absorb_turboshake128_1, 128, true, 1, 3);
+absorb_harness!(absorb_turboshake128_7, 128, true, 7, 9);
+absorb_harness!(absorb_turboshake128_8, 128, true, 8, 10);
+absorb_harness!(absorb_turboshake128_9, 128, true, 9, 11);
+absorb_harness!(absorb_turboshake128_17, 128, true, 17, 19);
+absorb_harness!(absorb_turboshake256_1, 256, true, 1, 3);
+absorb_harness!(absorb_turboshake256_7, 256, true, 7, 9);
+absorb_harness!(absorb_turboshake256_8, 256, true, 8, 10);
+absorb_harness!(absorb_turboshake256_9, 256, true, 9, 11);
+absorb_harness!(absorb_turboshake256_17, 256, true, 17, 19);
 
 macro_rules! finalize_harness {
     ($name:ident, $bits:literal, $turbo:literal, $domain:literal) => {

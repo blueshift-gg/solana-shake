@@ -12,7 +12,7 @@ readme = "README.md"
 exclude = [".github/", ".gitignore", "tests/", "program/", "internal-tests/", "formal_verification/"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(solana_shake_kani)", "cfg(kani_absorb)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(solana_shake_kani)"] }
 
 [dev-dependencies]
 sha3 = "0.10"
